@@ -47,6 +47,21 @@ HEADERS = {
 }
 
 # ---------------------------------------------------------------------------
+# Keywords that clearly indicate a microscopy / life-science page.
+# If the existing title matches any of these, skip full scraping.
+# ---------------------------------------------------------------------------
+
+MICROSCOPY_CLEAR_SIGNALS = [
+    "microscope", "microscopy", "microscopi",
+    "life science", "biological", "fluorescence", "confocal",
+    "cell imaging", "pathology", "hematology", "urinalysis",
+    "objective lens", "slide scanner", "whole slide",
+    "digital pathology", "camera adapter", "microscope camera",
+    "stereo microscope", "zoom microscope", "metallograph",
+    "material science", "materials science",
+]
+
+# ---------------------------------------------------------------------------
 # TNM / IMS keyword taxonomy
 # Things that belong on an NDT/inspection site but NOT a microscopy/life-science site
 # ---------------------------------------------------------------------------
@@ -166,7 +181,11 @@ def classify(text: str):
     return flagged, matched_categories, all_matched_kw, confidence
 
 
-def scrape_lightweight(url: str):
+def scrape_content(url: str):
+    """
+    Fetch title, meta description, h1, h2, and up to 10 body paragraphs.
+    Returns (text: str, method: str)
+    """
     try:
         resp = requests.get(
             url,
@@ -188,8 +207,14 @@ def scrape_lightweight(url: str):
         if meta_desc and meta_desc.get("content"):
             parts.append(meta_desc["content"].strip())
 
-        for h1 in soup.find_all("h1"):
-            parts.append(h1.get_text(" ", strip=True))
+        for tag in soup.find_all(["h1", "h2"]):
+            parts.append(tag.get_text(" ", strip=True))
+
+        # Pull up to 10 body paragraphs for richer signal
+        for p in soup.find_all("p")[:10]:
+            text = p.get_text(" ", strip=True)
+            if text:
+                parts.append(text)
 
         return " ".join(parts), "Live"
 
@@ -199,17 +224,30 @@ def scrape_lightweight(url: str):
         return "", "Error"
 
 
+def is_clearly_microscopy(title: str) -> bool:
+    """Return True if the title strongly suggests a microscopy/life-science page."""
+    t = title.lower()
+    return any(sig in t for sig in MICROSCOPY_CLEAR_SIGNALS)
+
+
 def process_url(args):
-    row_idx, url = args
-    live_text, scrape_method = scrape_lightweight(url)
+    row_idx, url, existing_title = args
 
-    if scrape_method in ("Blocked", "Error"):
-        analysis_text = slug_text(url)
-        scrape_method = "Slug-only"
+    # If the title clearly signals microscopy, skip the network fetch entirely
+    if existing_title and is_clearly_microscopy(existing_title):
+        title_text = existing_title + " " + slug_text(url)
+        flagged, categories, matched_kw, confidence = classify(title_text)
+        scrape_method = "Title-only (microscopy)"
     else:
-        analysis_text = live_text + " " + slug_text(url)
+        live_text, scrape_method = scrape_content(url)
 
-    flagged, categories, matched_kw, confidence = classify(analysis_text)
+        if scrape_method in ("Blocked", "Error"):
+            analysis_text = (existing_title or "") + " " + slug_text(url)
+            scrape_method = "Slug-only"
+        else:
+            analysis_text = live_text + " " + slug_text(url)
+
+        flagged, categories, matched_kw, confidence = classify(analysis_text)
 
     return {
         "row_idx": row_idx,
@@ -220,6 +258,7 @@ def process_url(args):
         "confidence": confidence,
         "scrape_method": scrape_method,
     }
+
 
 # ---------------------------------------------------------------------------
 # Excel helpers
@@ -307,6 +346,15 @@ def audit(input_path: str, resume: bool = False):
             cell = ws.cell(row=header_row, column=new_col_start + i, value=h)
             cell.font = Font(bold=True)
 
+    # Try to find a Page Title column (looks for "title" in header row)
+    title_col = None
+    if header_row:
+        for c in range(1, (ws.max_column or 10) + 1):
+            hval = str(ws.cell(row=header_row, column=c).value or "").lower()
+            if "title" in hval:
+                title_col = c
+                break
+
     url_jobs = []
     for row_idx in range(data_start_row, (ws.max_row or data_start_row) + 1):
         raw_val = get_cell_value(ws, row_idx, url_col)
@@ -317,7 +365,12 @@ def audit(input_path: str, resume: bool = False):
             continue
         if str(row_idx) in checkpoint:
             continue
-        url_jobs.append((row_idx, url))
+        existing_title = ""
+        if title_col:
+            tv = get_cell_value(ws, row_idx, title_col)
+            if isinstance(tv, str):
+                existing_title = tv.strip()
+        url_jobs.append((row_idx, url, existing_title))
 
     total_to_process = len(url_jobs) + len(checkpoint)
     print(f"  Total URLs   : {total_to_process}")
