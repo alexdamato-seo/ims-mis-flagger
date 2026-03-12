@@ -86,6 +86,7 @@ TAXONOMY = [
             "remote visual inspection", "rvi", "videoscope", "video borescope",
             "borescope", "fiberscope", "industrial endoscope",
             "pipeline inspection", "turbine inspection",
+            "visual inspection system",
         ],
         [
             r"\bIPLEX\b", r"\bIPlex\b",
@@ -107,8 +108,8 @@ TAXONOMY = [
     (
         "Non-Destructive Testing (NDT/NDE)",
         [
-            "non-destructive testing", "nondestructive testing", "ndt", "nde",
-            "inspection system", "eddy current", "magnetic particle",
+            "non-destructive testing", "nondestructive testing",
+            "eddy current", "magnetic particle",
             "liquid penetrant", "acoustic emission",
         ],
         [
